@@ -4,6 +4,7 @@ import io
 import os
 import subprocess
 import tempfile
+import shutil
 from datetime import date, timedelta
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -82,38 +83,95 @@ def fill_docx_template(name: str, start_date: str) -> bytes:
     return out.getvalue()
 
 
+def _find_libreoffice() -> str | None:
+    """Find the LibreOffice binary on the system."""
+    # Check common binary names
+    for binary in ["soffice", "libreoffice"]:
+        path = shutil.which(binary)
+        if path:
+            return path
+
+    # Check common install locations (Streamlit Cloud / Linux)
+    common_paths = [
+        "/usr/bin/soffice",
+        "/usr/bin/libreoffice",
+        "/usr/lib/libreoffice/program/soffice",
+        "/opt/libreoffice/program/soffice",
+        "/snap/bin/libreoffice",
+    ]
+    for p in common_paths:
+        if os.path.isfile(p):
+            return p
+
+    return None
+
+
 def docx_to_pdf(docx_bytes: bytes) -> bytes | None:
     """
     Convert docx → PDF via LibreOffice.
-    Sets HOME to a writable temp dir — required on Streamlit Cloud where
-    the default HOME is read-only and LibreOffice needs to write its profile.
+
+    Key fixes for Streamlit Community Cloud:
+    - Uses a fully isolated temp dir for LibreOffice's user profile
+      (avoids read-only HOME and profile-lock conflicts)
+    - Uses -env:UserInstallation= flag so LO never touches the real HOME
+    - Handles both soffice and libreoffice binary names
+    - Gracefully falls back to None if LO is not available
     """
+    lo_binary = _find_libreoffice()
+    if lo_binary is None:
+        return None
+
     with tempfile.TemporaryDirectory() as tmp:
-        # Give LibreOffice a writable home for its user profile
-        lo_home = os.path.join(tmp, "lo_home")
-        os.makedirs(lo_home, exist_ok=True)
+        # Dedicated writable profile dir — avoids any read-only-HOME issue
+        lo_profile = os.path.join(tmp, "lo_profile")
+        os.makedirs(lo_profile, exist_ok=True)
 
         docx_path = os.path.join(tmp, "offer_letter.docx")
         with open(docx_path, "wb") as f:
             f.write(docx_bytes)
 
         env = os.environ.copy()
-        env["HOME"]   = lo_home   # <-- the key fix for Streamlit Cloud
+        env["HOME"]   = lo_profile   # writable home for LibreOffice
         env["TMPDIR"] = tmp
 
-        for cmd in [
-            ["soffice",     "--headless", "--convert-to", "pdf", "--outdir", tmp, docx_path],
-            ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", tmp, docx_path],
-        ]:
-            try:
-                subprocess.run(cmd, capture_output=True, text=True,
-                               timeout=120, env=env)
-                pdf_path = docx_path.replace(".docx", ".pdf")
-                if os.path.exists(pdf_path):
-                    with open(pdf_path, "rb") as f:
-                        return f.read()
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                continue
+        # -env:UserInstallation tells LO exactly where to store its profile,
+        # preventing it from trying to use ~/.config/libreoffice (read-only on cloud)
+        profile_url = f"file://{lo_profile}"
+        cmd = [
+            lo_binary,
+            f"-env:UserInstallation={profile_url}",
+            "--headless",
+            "--norestore",
+            "--nofirststartwizard",
+            "--convert-to", "pdf",
+            "--outdir", tmp,
+            docx_path,
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+
+            pdf_path = docx_path.replace(".docx", ".pdf")
+            if os.path.exists(pdf_path):
+                with open(pdf_path, "rb") as f:
+                    return f.read()
+
+            # Log stderr for debugging (visible in Streamlit Cloud logs)
+            if result.returncode != 0:
+                print(f"[LO stderr]: {result.stderr}")
+                print(f"[LO stdout]: {result.stdout}")
+
+        except subprocess.TimeoutExpired:
+            print("[LO] Conversion timed out after 120s")
+        except Exception as e:
+            print(f"[LO] Unexpected error: {e}")
+
     return None
 
 
@@ -194,7 +252,10 @@ if st.button("⚡ Generate Offer Letter PDF", type="primary"):
                 mime="application/pdf",
             )
         else:
-            st.warning("PDF conversion failed. Downloading as Word document instead.")
+            st.warning(
+                "PDF conversion failed — LibreOffice may not be available on this server. "
+                "Downloading as Word document instead."
+            )
             st.download_button(
                 label="⬇️  Download DOCX",
                 data=docx_bytes,
