@@ -4,7 +4,6 @@ import io
 import os
 import subprocess
 import tempfile
-import shutil
 from datetime import date, timedelta
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -38,7 +37,6 @@ st.markdown("""
         border-radius:8px; padding:.65rem 2rem; font-size:1rem; font-weight:600;
         width:100%; margin-top:.5rem; cursor:pointer;
     }
-    div[data-testid="stButton"] button:hover { background:#14304e; }
     div[data-testid="stDownloadButton"] button {
         background:#0e6e3e; color:white; border:none;
         border-radius:8px; padding:.65rem 2rem; font-size:1rem; font-weight:600;
@@ -48,7 +46,6 @@ st.markdown("""
         background:#f0f4f8; border-radius:10px; padding:1.5rem 2rem;
         border-left: 4px solid #1a3a5c; margin-top:1.2rem;
         font-size:.92rem; line-height:1.7; color:#2d2d2d;
-        white-space: pre-wrap;
     }
     .success-badge {
         background:#e6f4ee; color:#0e6e3e; border-radius:6px;
@@ -60,25 +57,22 @@ st.markdown("""
 
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "offer_letter_temp.docx")
 
-# ── Helper: fill template and convert to PDF ──────────────────────────────────
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def fill_docx_template(name: str, start_date: str) -> bytes:
-    """Replace {} placeholders in the docx XML and return the new docx bytes."""
+    """Replace {} placeholders in the docx XML and return new docx bytes."""
     with open(TEMPLATE_PATH, "rb") as f:
         docx_bytes = f.read()
 
     with zipfile.ZipFile(io.BytesIO(docx_bytes), "r") as zin:
-        names = zin.namelist()
-        files = {n: zin.read(n) for n in names}
+        files = {n: zin.read(n) for n in zin.namelist()}
 
     xml = files["word/document.xml"].decode("utf-8")
-
-    # Replace first {} with candidate name, second {} with start date
     first  = xml.index("{}")
-    xml    = xml[:first] + name + xml[first+2:]
+    xml    = xml[:first] + name + xml[first + 2:]
     second = xml.index("{}")
-    xml    = xml[:second] + start_date + xml[second+2:]
-
+    xml    = xml[:second] + start_date + xml[second + 2:]
     files["word/document.xml"] = xml.encode("utf-8")
 
     out = io.BytesIO()
@@ -89,71 +83,31 @@ def fill_docx_template(name: str, start_date: str) -> bytes:
 
 
 def docx_to_pdf(docx_bytes: bytes) -> bytes | None:
-    """Convert docx bytes → PDF bytes via LibreOffice."""
+    """
+    Convert docx → PDF via LibreOffice.
+    Sets HOME to a writable temp dir — required on Streamlit Cloud where
+    the default HOME is read-only and LibreOffice needs to write its profile.
+    """
     with tempfile.TemporaryDirectory() as tmp:
+        # Give LibreOffice a writable home for its user profile
+        lo_home = os.path.join(tmp, "lo_home")
+        os.makedirs(lo_home, exist_ok=True)
+
         docx_path = os.path.join(tmp, "offer_letter.docx")
         with open(docx_path, "wb") as f:
             f.write(docx_bytes)
 
-        result = subprocess.run(
-            ["python3", "/usr/local/bin/soffice.py", "--headless",
-             "--convert-to", "pdf", "--outdir", tmp, docx_path],
-            capture_output=True, text=True, timeout=60
-        )
+        env = os.environ.copy()
+        env["HOME"]   = lo_home   # <-- the key fix for Streamlit Cloud
+        env["TMPDIR"] = tmp
 
-        # Try system soffice if wrapper not found
-        if result.returncode != 0:
-            result = subprocess.run(
-                ["soffice", "--headless", "--convert-to", "pdf",
-                 "--outdir", tmp, docx_path],
-                capture_output=True, text=True, timeout=60
-            )
-
-        pdf_path = docx_path.replace(".docx", ".pdf")
-        if os.path.exists(pdf_path):
-            with open(pdf_path, "rb") as f:
-                return f.read()
-    return None
-
-
-def soffice_path():
-    """Locate the soffice helper used by the skills."""
-    candidates = [
-        "/mnt/skills/public/docx/scripts/office/soffice.py",
-        "/mnt/skills/public/pptx/scripts/office/soffice.py",
-        "/usr/local/bin/soffice.py",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    result = subprocess.run(["find", "/mnt/skills", "-name", "soffice.py", "-maxdepth", "6"],
-                            capture_output=True, text=True, timeout=10)
-    lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
-    return lines[0] if lines else None
-
-
-def docx_to_pdf_v2(docx_bytes: bytes) -> bytes | None:
-    """Convert docx bytes → PDF bytes, trying multiple soffice paths."""
-    with tempfile.TemporaryDirectory() as tmp:
-        docx_path = os.path.join(tmp, "offer_letter.docx")
-        with open(docx_path, "wb") as f:
-            f.write(docx_bytes)
-
-        commands = []
-
-        sp = soffice_path()
-        if sp:
-            commands.append(["python3", sp, "--headless",
-                             "--convert-to", "pdf", "--outdir", tmp, docx_path])
-
-        commands += [
-            ["soffice", "--headless", "--convert-to", "pdf", "--outdir", tmp, docx_path],
+        for cmd in [
+            ["soffice",     "--headless", "--convert-to", "pdf", "--outdir", tmp, docx_path],
             ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", tmp, docx_path],
-        ]
-
-        for cmd in commands:
+        ]:
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+                subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=120, env=env)
                 pdf_path = docx_path.replace(".docx", ".pdf")
                 if os.path.exists(pdf_path):
                     with open(pdf_path, "rb") as f:
@@ -161,6 +115,13 @@ def docx_to_pdf_v2(docx_bytes: bytes) -> bytes | None:
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 continue
     return None
+
+
+def ordinal(n: int) -> str:
+    suffix = {1: "st", 2: "nd", 3: "rd"}.get(
+        n % 10 if n % 100 not in (11, 12, 13) else 0, "th"
+    )
+    return f"{n}{suffix}"
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -197,54 +158,43 @@ with col2:
         format="DD/MM/YYYY"
     )
 
-# Format date nicely e.g. "1st July 2025"
-def ordinal(n):
-    suffix = {1:"st",2:"nd",3:"rd"}.get(n % 10 if n % 100 not in (11,12,13) else 0, "th")
-    return f"{n}{suffix}"
-
 formatted_date = f"{ordinal(start_date.day)} {start_date.strftime('%B %Y')}"
 
 # Live preview
 if candidate_name.strip():
     st.markdown(f"""
-    <div class="preview-box"><strong>Preview snippet:</strong>
-
-Dear <strong>{candidate_name}</strong>,
-
-On behalf of <strong>Harion Research</strong>, I am pleased to offer you the position of <strong>Equity Research Analyst Intern</strong> for a duration of <strong>2 months</strong>, starting from <strong>{formatted_date}</strong>.
+    <div class="preview-box"><strong>Preview snippet:</strong><br><br>
+Dear <strong>{candidate_name}</strong>,<br><br>
+On behalf of <strong>Harion Research</strong>, I am pleased to offer you the position of
+<strong>Equity Research Analyst Intern</strong> for a duration of <strong>2 months</strong>,
+starting from <strong>{formatted_date}</strong>.
     </div>""", unsafe_allow_html=True)
 else:
     st.info("👆 Enter the candidate's name above to see a live preview.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-generate_clicked = st.button("⚡ Generate Offer Letter PDF", type="primary")
-
-if generate_clicked:
+if st.button("⚡ Generate Offer Letter PDF", type="primary"):
     if not candidate_name.strip():
         st.error("Please enter the candidate's name before generating.")
     else:
         with st.spinner("Filling template and converting to PDF…"):
             docx_bytes = fill_docx_template(candidate_name.strip(), formatted_date)
-            pdf_bytes  = docx_to_pdf_v2(docx_bytes)
+            pdf_bytes  = docx_to_pdf(docx_bytes)
+
+        safe_name = candidate_name.strip().replace(" ", "_")
 
         if pdf_bytes:
             st.markdown('<p class="success-badge">✅ Offer letter ready for download!</p>',
                         unsafe_allow_html=True)
-
-            safe_name = candidate_name.strip().replace(" ", "_")
-            filename  = f"Offer_Letter_{safe_name}.pdf"
-
             st.download_button(
                 label="⬇️  Download PDF",
                 data=pdf_bytes,
-                file_name=filename,
+                file_name=f"Offer_Letter_{safe_name}.pdf",
                 mime="application/pdf",
             )
         else:
-            # Fallback: offer docx download
-            st.warning("PDF conversion unavailable on this system. Downloading as Word document instead.")
-            safe_name = candidate_name.strip().replace(" ", "_")
+            st.warning("PDF conversion failed. Downloading as Word document instead.")
             st.download_button(
                 label="⬇️  Download DOCX",
                 data=docx_bytes,
@@ -252,7 +202,7 @@ if generate_clicked:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
-st.markdown("</div>", unsafe_allow_html=True)  # close main-card
+st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("---")
 st.markdown(
