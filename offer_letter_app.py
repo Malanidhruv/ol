@@ -17,24 +17,33 @@ st.set_page_config(
 # ── Branding / CSS ────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .stApp { background: #f7f9fc; }
+    /* Force dark theme */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+        background-color: #0e1117 !important;
+        color: #fafafa !important;
+    }
+    [data-testid="stHeader"] { background-color: #0e1117 !important; }
+    [data-testid="stSidebar"] { background-color: #161b22 !important; }
+
+    .stApp { background: #0e1117; }
     .main-card {
-        background: white;
+        background: #1c2333;
         border-radius: 14px;
         padding: 2.5rem 2.5rem 2rem;
-        box-shadow: 0 2px 18px rgba(0,0,0,0.07);
+        box-shadow: 0 2px 18px rgba(0,0,0,0.4);
         margin-top: 1.5rem;
+        color: #fafafa;
     }
     .brand-header {
         display:flex; align-items:center; gap:14px;
-        border-bottom: 2px solid #1a3a5c; padding-bottom:1rem; margin-bottom:1.8rem;
+        border-bottom: 2px solid #4a90d9; padding-bottom:1rem; margin-bottom:1.8rem;
     }
-    .brand-title { font-size:1.55rem; font-weight:700; color:#1a3a5c; margin:0; }
-    .brand-sub   { font-size:.85rem; color:#5a7fa8; margin:0; }
-    .section-label { font-size:.78rem; font-weight:600; color:#5a7fa8;
+    .brand-title { font-size:1.55rem; font-weight:700; color:#4a90d9; margin:0; }
+    .brand-sub   { font-size:.85rem; color:#8ab4d4; margin:0; }
+    .section-label { font-size:.78rem; font-weight:600; color:#8ab4d4;
                      text-transform:uppercase; letter-spacing:.08em; margin-bottom:.3rem; }
     div[data-testid="stButton"] button {
-        background:#1a3a5c; color:white; border:none;
+        background:#4a90d9; color:white; border:none;
         border-radius:8px; padding:.65rem 2rem; font-size:1rem; font-weight:600;
         width:100%; margin-top:.5rem; cursor:pointer;
     }
@@ -44,14 +53,38 @@ st.markdown("""
         width:100%; margin-top:.5rem;
     }
     .preview-box {
-        background:#f0f4f8; border-radius:10px; padding:1.5rem 2rem;
-        border-left: 4px solid #1a3a5c; margin-top:1.2rem;
-        font-size:.92rem; line-height:1.7; color:#2d2d2d;
+        background:#0e1117; border-radius:10px; padding:1.5rem 2rem;
+        border-left: 4px solid #4a90d9; margin-top:1.2rem;
+        font-size:.92rem; line-height:1.7; color:#fafafa;
     }
     .success-badge {
-        background:#e6f4ee; color:#0e6e3e; border-radius:6px;
+        background:#0e2e1e; color:#3dd68c; border-radius:6px;
         padding:.45rem 1rem; font-weight:600; font-size:.9rem;
         display:inline-block; margin-bottom:1rem;
+    }
+
+    /* Inputs */
+    [data-testid="stTextInput"] input {
+        background:#0e1117 !important; color:#fafafa !important;
+        border: 1px solid #2d3a4a !important; border-radius:8px !important;
+    }
+    [data-testid="stDateInput"] input {
+        background:#0e1117 !important; color:#fafafa !important;
+        border: 1px solid #2d3a4a !important;
+    }
+
+    /* Tabs */
+    [data-testid="stTabs"] button {
+        color: #8ab4d4 !important;
+    }
+    [data-testid="stTabs"] button[aria-selected="true"] {
+        color: #4a90d9 !important;
+        border-bottom: 2px solid #4a90d9 !important;
+    }
+
+    /* Info / warning boxes */
+    [data-testid="stAlert"] {
+        background:#1c2333 !important; color:#fafafa !important;
     }
 </style>
 """, unsafe_allow_html=True)
