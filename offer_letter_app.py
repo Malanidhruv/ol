@@ -56,14 +56,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "offer_letter_temp.docx")
+EQUITY_TEMPLATE_PATH     = os.path.join(os.path.dirname(__file__), "offer_letter_temp.docx")
+MARKETING_TEMPLATE_PATH  = os.path.join(os.path.dirname(__file__), "offer_letter_marketing_temp.docx")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def fill_docx_template(name: str, start_date: str) -> bytes:
+def fill_docx_template(template_path: str, name: str, start_date: str) -> bytes:
     """Replace {} placeholders in the docx XML and return new docx bytes."""
-    with open(TEMPLATE_PATH, "rb") as f:
+    with open(template_path, "rb") as f:
         docx_bytes = f.read()
 
     with zipfile.ZipFile(io.BytesIO(docx_bytes), "r") as zin:
@@ -84,14 +85,10 @@ def fill_docx_template(name: str, start_date: str) -> bytes:
 
 
 def _find_libreoffice() -> str | None:
-    """Find the LibreOffice binary on the system."""
-    # Check common binary names
     for binary in ["soffice", "libreoffice"]:
         path = shutil.which(binary)
         if path:
             return path
-
-    # Check common install locations (Streamlit Cloud / Linux)
     common_paths = [
         "/usr/bin/soffice",
         "/usr/bin/libreoffice",
@@ -102,27 +99,15 @@ def _find_libreoffice() -> str | None:
     for p in common_paths:
         if os.path.isfile(p):
             return p
-
     return None
 
 
 def docx_to_pdf(docx_bytes: bytes) -> bytes | None:
-    """
-    Convert docx → PDF via LibreOffice.
-
-    Key fixes for Streamlit Community Cloud:
-    - Uses a fully isolated temp dir for LibreOffice's user profile
-      (avoids read-only HOME and profile-lock conflicts)
-    - Uses -env:UserInstallation= flag so LO never touches the real HOME
-    - Handles both soffice and libreoffice binary names
-    - Gracefully falls back to None if LO is not available
-    """
     lo_binary = _find_libreoffice()
     if lo_binary is None:
         return None
 
     with tempfile.TemporaryDirectory() as tmp:
-        # Dedicated writable profile dir — avoids any read-only-HOME issue
         lo_profile = os.path.join(tmp, "lo_profile")
         os.makedirs(lo_profile, exist_ok=True)
 
@@ -131,11 +116,9 @@ def docx_to_pdf(docx_bytes: bytes) -> bytes | None:
             f.write(docx_bytes)
 
         env = os.environ.copy()
-        env["HOME"]   = lo_profile   # writable home for LibreOffice
+        env["HOME"]   = lo_profile
         env["TMPDIR"] = tmp
 
-        # -env:UserInstallation tells LO exactly where to store its profile,
-        # preventing it from trying to use ~/.config/libreoffice (read-only on cloud)
         profile_url = f"file://{lo_profile}"
         cmd = [
             lo_binary,
@@ -149,24 +132,14 @@ def docx_to_pdf(docx_bytes: bytes) -> bytes | None:
         ]
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                env=env,
-            )
-
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
             pdf_path = docx_path.replace(".docx", ".pdf")
             if os.path.exists(pdf_path):
                 with open(pdf_path, "rb") as f:
                     return f.read()
-
-            # Log stderr for debugging (visible in Streamlit Cloud logs)
             if result.returncode != 0:
                 print(f"[LO stderr]: {result.stderr}")
                 print(f"[LO stdout]: {result.stdout}")
-
         except subprocess.TimeoutExpired:
             print("[LO] Conversion timed out after 120s")
         except Exception as e:
@@ -182,6 +155,81 @@ def ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
+def render_offer_letter_form(role_title: str, template_path: str, key_prefix: str):
+    """Reusable form for any offer letter type."""
+    st.markdown(f"Fill in the candidate details below to generate a personalised **{role_title}** offer letter as a PDF.")
+
+    col1, col2 = st.columns([3, 2])
+
+    with col1:
+        st.markdown('<p class="section-label">Candidate Full Name</p>', unsafe_allow_html=True)
+        candidate_name = st.text_input(
+            "Candidate Full Name",
+            placeholder="e.g. Ananya Sharma",
+            label_visibility="collapsed",
+            key=f"{key_prefix}_name"
+        )
+
+    with col2:
+        st.markdown('<p class="section-label">Internship Start Date</p>', unsafe_allow_html=True)
+        start_date = st.date_input(
+            "Start Date",
+            value=date.today() + timedelta(days=7),
+            min_value=date.today(),
+            label_visibility="collapsed",
+            format="DD/MM/YYYY",
+            key=f"{key_prefix}_date"
+        )
+
+    formatted_date = f"{ordinal(start_date.day)} {start_date.strftime('%B %Y')}"
+
+    if candidate_name.strip():
+        st.markdown(f"""
+        <div class="preview-box"><strong>Preview snippet:</strong><br><br>
+Dear <strong>{candidate_name}</strong>,<br><br>
+On behalf of <strong>Harion Research</strong>, I am pleased to offer you the position of
+<strong>{role_title}</strong> for a duration of <strong>2 months</strong>,
+starting from <strong>{formatted_date}</strong>.
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.info("👆 Enter the candidate's name above to see a live preview.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    if st.button("⚡ Generate Offer Letter PDF", key=f"{key_prefix}_btn"):
+        if not candidate_name.strip():
+            st.error("Please enter the candidate's name before generating.")
+        else:
+            with st.spinner("Filling template and converting to PDF…"):
+                docx_bytes = fill_docx_template(template_path, candidate_name.strip(), formatted_date)
+                pdf_bytes  = docx_to_pdf(docx_bytes)
+
+            safe_name = candidate_name.strip().replace(" ", "_")
+
+            if pdf_bytes:
+                st.markdown('<p class="success-badge">✅ Offer letter ready for download!</p>',
+                            unsafe_allow_html=True)
+                st.download_button(
+                    label="⬇️  Download PDF",
+                    data=pdf_bytes,
+                    file_name=f"Offer_Letter_{safe_name}.pdf",
+                    mime="application/pdf",
+                    key=f"{key_prefix}_dl_pdf"
+                )
+            else:
+                st.warning(
+                    "PDF conversion failed — LibreOffice may not be available on this server. "
+                    "Downloading as Word document instead."
+                )
+                st.download_button(
+                    label="⬇️  Download DOCX",
+                    data=docx_bytes,
+                    file_name=f"Offer_Letter_{safe_name}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key=f"{key_prefix}_dl_docx"
+                )
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.markdown("""
@@ -194,74 +242,21 @@ st.markdown("""
   </div>
 """, unsafe_allow_html=True)
 
-st.markdown("Fill in the candidate details below to generate a personalised offer letter as a PDF.")
+tab1, tab2 = st.tabs(["📊 Equity Research Analyst", "📣 Marketing"])
 
-col1, col2 = st.columns([3, 2])
-
-with col1:
-    st.markdown('<p class="section-label">Candidate Full Name</p>', unsafe_allow_html=True)
-    candidate_name = st.text_input(
-        "Candidate Full Name",
-        placeholder="e.g. Ananya Sharma",
-        label_visibility="collapsed"
+with tab1:
+    render_offer_letter_form(
+        role_title="Equity Research Analyst Intern",
+        template_path=EQUITY_TEMPLATE_PATH,
+        key_prefix="equity"
     )
 
-with col2:
-    st.markdown('<p class="section-label">Internship Start Date</p>', unsafe_allow_html=True)
-    start_date = st.date_input(
-        "Start Date",
-        value=date.today() + timedelta(days=7),
-        min_value=date.today(),
-        label_visibility="collapsed",
-        format="DD/MM/YYYY"
+with tab2:
+    render_offer_letter_form(
+        role_title="Marketing Intern",
+        template_path=MARKETING_TEMPLATE_PATH,
+        key_prefix="marketing"
     )
-
-formatted_date = f"{ordinal(start_date.day)} {start_date.strftime('%B %Y')}"
-
-# Live preview
-if candidate_name.strip():
-    st.markdown(f"""
-    <div class="preview-box"><strong>Preview snippet:</strong><br><br>
-Dear <strong>{candidate_name}</strong>,<br><br>
-On behalf of <strong>Harion Research</strong>, I am pleased to offer you the position of
-<strong>Equity Research Analyst Intern</strong> for a duration of <strong>2 months</strong>,
-starting from <strong>{formatted_date}</strong>.
-    </div>""", unsafe_allow_html=True)
-else:
-    st.info("👆 Enter the candidate's name above to see a live preview.")
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-if st.button("⚡ Generate Offer Letter PDF", type="primary"):
-    if not candidate_name.strip():
-        st.error("Please enter the candidate's name before generating.")
-    else:
-        with st.spinner("Filling template and converting to PDF…"):
-            docx_bytes = fill_docx_template(candidate_name.strip(), formatted_date)
-            pdf_bytes  = docx_to_pdf(docx_bytes)
-
-        safe_name = candidate_name.strip().replace(" ", "_")
-
-        if pdf_bytes:
-            st.markdown('<p class="success-badge">✅ Offer letter ready for download!</p>',
-                        unsafe_allow_html=True)
-            st.download_button(
-                label="⬇️  Download PDF",
-                data=pdf_bytes,
-                file_name=f"Offer_Letter_{safe_name}.pdf",
-                mime="application/pdf",
-            )
-        else:
-            st.warning(
-                "PDF conversion failed — LibreOffice may not be available on this server. "
-                "Downloading as Word document instead."
-            )
-            st.download_button(
-                label="⬇️  Download DOCX",
-                data=docx_bytes,
-                file_name=f"Offer_Letter_{safe_name}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
 
 st.markdown("</div>", unsafe_allow_html=True)
 
