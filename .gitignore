@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.st/
+.streamlit/
+*.log
+debug_pdf.py
+debug_mkt_cert.py
+test_dispatchex.py
+test_ref_no.py
+test_trim.py
+add_ref_no.py
+inspect_pagebreaks.py
+inspect_spacing.py
+inspect_templates.py
+fix_cert_form.py

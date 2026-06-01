@@ -6,6 +6,14 @@ import subprocess
 import tempfile
 import shutil
 from datetime import date, timedelta
+import random
+import string
+
+try:
+    from docx2pdf import convert as _docx2pdf_convert
+    _HAS_DOCX2PDF = True
+except ImportError:
+    _HAS_DOCX2PDF = False
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -89,14 +97,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-EQUITY_TEMPLATE_PATH     = os.path.join(os.path.dirname(__file__), "offer_letter_temp.docx")
-MARKETING_TEMPLATE_PATH  = os.path.join(os.path.dirname(__file__), "offer_letter_marketing_temp.docx")
+EQUITY_TEMPLATE_PATH          = os.path.join(os.path.dirname(__file__), "offer_letter_temp.docx")
+MARKETING_TEMPLATE_PATH       = os.path.join(os.path.dirname(__file__), "offer_letter_marketing_temp.docx")
+EQUITY_CERT_TEMPLATE_PATH     = os.path.join(os.path.dirname(__file__), "Cert.docx")
+MARKETING_CERT_TEMPLATE_PATH  = os.path.join(os.path.dirname(__file__), "Cert_marketing.docx")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def fill_docx_template(template_path: str, name: str, start_date: str) -> bytes:
-    """Replace {} placeholders in the docx XML and return new docx bytes."""
+def fill_docx_template(template_path: str, name: str, start_date: str, ref_no: str) -> bytes:
+    """Replace {} placeholders in the docx XML, inject Ref No, return new docx bytes."""
     with open(template_path, "rb") as f:
         docx_bytes = f.read()
 
@@ -114,7 +124,9 @@ def fill_docx_template(template_path: str, name: str, start_date: str) -> bytes:
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
         for n, data in files.items():
             zout.writestr(n, data)
-    return out.getvalue()
+
+    # Inject the Ref No paragraph after the title (paragraph index 2)
+    return inject_ref_no(out.getvalue(), ref_no, insert_after_idx=2)
 
 
 def _find_libreoffice() -> str | None:
@@ -135,50 +147,81 @@ def _find_libreoffice() -> str | None:
     return None
 
 
-def docx_to_pdf(docx_bytes: bytes) -> bytes | None:
-    lo_binary = _find_libreoffice()
-    if lo_binary is None:
-        return None
-
+def docx_to_pdf(docx_bytes: bytes) -> tuple[bytes | None, str]:
+    """Convert docx bytes to PDF bytes.
+    Returns (pdf_bytes, error_msg). pdf_bytes is None on failure.
+    Priority: docx2pdf (MS Word COM via subprocess) → LibreOffice → None.
+    """
+    import sys as _sys
     with tempfile.TemporaryDirectory() as tmp:
-        lo_profile = os.path.join(tmp, "lo_profile")
-        os.makedirs(lo_profile, exist_ok=True)
-
-        docx_path = os.path.join(tmp, "offer_letter.docx")
+        docx_path = os.path.join(tmp, "document.docx")
+        pdf_path  = os.path.join(tmp, "document.pdf")
         with open(docx_path, "wb") as f:
             f.write(docx_bytes)
 
-        env = os.environ.copy()
-        env["HOME"]   = lo_profile
-        env["TMPDIR"] = tmp
-
-        profile_url = f"file://{lo_profile}"
-        cmd = [
-            lo_binary,
-            f"-env:UserInstallation={profile_url}",
-            "--headless",
-            "--norestore",
-            "--nofirststartwizard",
-            "--convert-to", "pdf",
-            "--outdir", tmp,
-            docx_path,
-        ]
-
+        # ── 1. Try Word COM via DispatchEx (always a fresh Word process) ──────
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
-            pdf_path = docx_path.replace(".docx", ".pdf")
-            if os.path.exists(pdf_path):
+            helper = os.path.join(tmp, "_conv_helper.py")
+            with open(helper, "w") as _hf:
+                _hf.write(
+                    "import sys, os\n"
+                    "from pathlib import Path\n"
+                    "import win32com.client\n"
+                    "docx = str(Path(sys.argv[1]).resolve())\n"
+                    "pdf  = str(Path(sys.argv[2]).resolve())\n"
+                    "word = win32com.client.DispatchEx('Word.Application')\n"
+                    "word.Visible = False\n"
+                    "try:\n"
+                    "    doc = word.Documents.Open(docx)\n"
+                    "    doc.SaveAs(pdf, FileFormat=17)\n"
+                    "    doc.Close(0)\n"
+                    "finally:\n"
+                    "    word.Quit()\n"
+                )
+            result = subprocess.run(
+                [_sys.executable, helper, docx_path, pdf_path],
+                capture_output=True, text=True, timeout=180,
+            )
+            if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
                 with open(pdf_path, "rb") as f:
-                    return f.read()
-            if result.returncode != 0:
-                print(f"[LO stderr]: {result.stderr}")
-                print(f"[LO stdout]: {result.stdout}")
+                    return f.read(), ""
+            err = (result.stderr or result.stdout or "no output").strip()
+            print("[Word COM] failed:", err)
         except subprocess.TimeoutExpired:
-            print("[LO] Conversion timed out after 120s")
+            print("[docx2pdf] timed out")
+            err = "docx2pdf timed out after 180 s"
         except Exception as e:
-            print(f"[LO] Unexpected error: {e}")
+            err = str(e)
+            print("[docx2pdf] Error:", err)
 
-    return None
+        # ── 2. Fall back to LibreOffice ───────────────────────────────────
+        lo_binary = _find_libreoffice()
+        if lo_binary:
+            lo_profile = os.path.join(tmp, "lo_profile")
+            os.makedirs(lo_profile, exist_ok=True)
+            env = os.environ.copy()
+            env["HOME"]   = lo_profile
+            env["TMPDIR"] = tmp
+            profile_url = "file://" + lo_profile
+            cmd = [
+                lo_binary,
+                "-env:UserInstallation=" + profile_url,
+                "--headless", "--norestore", "--nofirststartwizard",
+                "--convert-to", "pdf",
+                "--outdir", tmp,
+                docx_path,
+            ]
+            try:
+                lo_result = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env)
+                lo_pdf = docx_path.replace(".docx", ".pdf")
+                if os.path.exists(lo_pdf):
+                    with open(lo_pdf, "rb") as f:
+                        return f.read(), ""
+                err += " | LO: " + (lo_result.stderr or "no output").strip()
+            except Exception as e:
+                err += " | LO error: " + str(e)
+
+    return None, err
 
 
 def ordinal(n: int) -> str:
@@ -186,6 +229,246 @@ def ordinal(n: int) -> str:
         n % 10 if n % 100 not in (11, 12, 13) else 0, "th"
     )
     return f"{n}{suffix}"
+
+
+def gen_ref_no() -> str:
+    """Generate a unique reference number like HAR/A3X9/7BKQ."""
+    chars = string.ascii_uppercase + string.digits
+    part1 = ''.join(random.choices(chars, k=4))
+    part2 = ''.join(random.choices(chars, k=4))
+    return f"HAR/{part1}/{part2}"
+
+
+def inject_ref_no(docx_bytes: bytes, ref_no: str, insert_after_idx: int = 2) -> bytes:
+    """Insert a Ref No paragraph into the document using python-docx.
+
+    Copies the run formatting from the paragraph at insert_after_idx so the
+    font, size, and colour match the surrounding text.
+    insert_after_idx=2 works for both offer-letter and certificate templates
+    (the blank line after the main heading).
+
+    For certificate templates: also removes 2 of the 3 empty paragraphs before
+    the signing block to prevent the content overflowing onto a second page.
+    """
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    import copy as _copy
+
+    doc = Document(io.BytesIO(docx_bytes))
+    paras = doc.paragraphs
+
+    # Determine a reference paragraph to copy formatting from
+    ref_para = paras[min(insert_after_idx + 1, len(paras) - 1)]
+
+    # Build a new paragraph element
+    new_para_elem = OxmlElement('w:p')
+
+    # Copy paragraph properties (alignment, spacing) from the reference para
+    if ref_para._p.pPr is not None:
+        new_para_elem.append(_copy.deepcopy(ref_para._p.pPr))
+
+    # Build a run with the ref-no text
+    r_elem = OxmlElement('w:r')
+
+    # Copy run properties from the first run of the reference paragraph if any
+    if ref_para.runs:
+        src_rpr = ref_para.runs[0]._r.find(qn('w:rPr'))
+        if src_rpr is not None:
+            r_elem.append(_copy.deepcopy(src_rpr))
+
+    t_elem = OxmlElement('w:t')
+    t_elem.text = f"Ref No.: {ref_no}"
+    t_elem.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+    r_elem.append(t_elem)
+    new_para_elem.append(r_elem)
+
+    # Insert after the paragraph at insert_after_idx
+    anchor = paras[insert_after_idx]._p
+    anchor.addnext(new_para_elem)
+
+    # For certificate templates: trim 2 of the 3 empty paragraphs before the
+    # signing block so everything fits on one page.
+    # Detect cert by looking for "For Harion Research" paragraph.
+    paras = doc.paragraphs  # refresh after insert
+    signing_idx = next(
+        (i for i, p in enumerate(paras) if p.text.strip().startswith("For Harion Research")),
+        None,
+    )
+    if signing_idx is not None:
+        # Collect consecutive empty paragraphs immediately before the signing block
+        empty_before = []
+        j = signing_idx - 1
+        while j >= 0 and paras[j].text.strip() == "":
+            empty_before.append(paras[j]._p)
+            j -= 1
+        # Remove all but 1 empty paragraph (keep 1 for spacing)
+        for p_elem in empty_before[1:]:
+            p_elem.getparent().remove(p_elem)
+
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+
+def fill_cert_docx_template(
+    template_path: str,
+    name: str,
+    from_date: str,
+    to_date: str,
+    issue_date: str,
+    ref_no: str,
+) -> bytes:
+    """Replace the 5 {} placeholders in the certificate template.
+
+    Confirmed placeholder order (from XML inspection):
+      1st  {} → issue date      (after "Date:")
+      2nd  {} → intern name     ("certify that {} has successfully")
+      3rd  {} → from date       ("from {} to")
+      4th  {} → to date         ("to {}")
+      5th  {} → intern name     ("put in by {}")
+    """
+    with open(template_path, "rb") as f:
+        docx_bytes = f.read()
+
+    with zipfile.ZipFile(io.BytesIO(docx_bytes), "r") as zin:
+        files = {n: zin.read(n) for n in zin.namelist()}
+
+    xml = files["word/document.xml"].decode("utf-8")
+    for replacement in [issue_date, name, from_date, to_date, name]:
+        idx = xml.index("{}")
+        xml = xml[:idx] + replacement + xml[idx + 2:]
+    files["word/document.xml"] = xml.encode("utf-8")
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for n, data in files.items():
+            zout.writestr(n, data)
+
+    # Inject Ref No paragraph after "TO WHOMSOEVER IT MAY CONCERN" (index 2)
+    return inject_ref_no(out.getvalue(), ref_no, insert_after_idx=2)
+
+
+def render_certificate_form(role_title: str, template_path: str, key_prefix: str):
+    """Reusable certificate generation form."""
+    st.markdown(
+        f"Fill in the details below to generate a personalised **{role_title}** "
+        "completion certificate as a PDF."
+    )
+
+    # Row 1 - name
+    st.markdown('<p class="section-label">Intern Full Name</p>', unsafe_allow_html=True)
+    cert_name = st.text_input(
+        "Intern Full Name",
+        placeholder="e.g. Ananya Sharma",
+        label_visibility="collapsed",
+        key=f"{key_prefix}_cert_name",
+    )
+
+    # Row 2 - internship period
+    col_from, col_to = st.columns(2)
+    with col_from:
+        st.markdown('<p class="section-label">Internship From</p>', unsafe_allow_html=True)
+        cert_from = st.date_input(
+            "From",
+            value=date.today().replace(day=1),
+            label_visibility="collapsed",
+            format="DD/MM/YYYY",
+            key=f"{key_prefix}_cert_from",
+        )
+    with col_to:
+        st.markdown('<p class="section-label">Internship To</p>', unsafe_allow_html=True)
+        cert_to = st.date_input(
+            "To",
+            value=date.today(),
+            label_visibility="collapsed",
+            format="DD/MM/YYYY",
+            key=f"{key_prefix}_cert_to",
+        )
+
+    # Row 3 - date of issuance
+    st.markdown('<p class="section-label">Date of Issuance</p>', unsafe_allow_html=True)
+    cert_issue = st.date_input(
+        "Date of Issuance",
+        value=date.today(),
+        label_visibility="collapsed",
+        format="DD/MM/YYYY",
+        key=f"{key_prefix}_cert_issue",
+    )
+
+    fmt_from  = f"{ordinal(cert_from.day)} {cert_from.strftime('%B %Y')}"
+    fmt_to    = f"{ordinal(cert_to.day)} {cert_to.strftime('%B %Y')}"
+    fmt_issue = f"{ordinal(cert_issue.day)} {cert_issue.strftime('%B %Y')}"
+
+    # Live preview
+    if cert_name.strip():
+        st.markdown(
+            f'<div class="preview-box"><strong>Preview snippet:</strong><br><br>'
+            f'<span style="color:#8ab4d4;font-size:.82rem;">Ref No.: HAR/XXXX/XXXX &nbsp;(generated on download)</span><br><br>'
+            f'Date of Issuance: <strong>{fmt_issue}</strong><br><br>'
+            f'This is to certify that <strong>{cert_name}</strong> has successfully completed '
+            f'the internship as a <strong>{role_title}</strong> at <strong>Harion Research</strong> '
+            f'from <strong>{fmt_from}</strong> to <strong>{fmt_to}</strong>.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("\U0001f446 Enter the intern\u2019s name above to see a live preview.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Session-state keys - persist generated bytes across Streamlit reruns
+    ss_pdf  = f"{key_prefix}_pdf_bytes"
+    ss_docx = f"{key_prefix}_docx_bytes"
+    ss_name = f"{key_prefix}_safe_name"
+
+    if st.button("\U0001f393 Generate Certificate PDF", key=f"{key_prefix}_cert_btn"):
+        if not cert_name.strip():
+            st.error("Please enter the intern's name before generating.")
+        elif cert_to < cert_from:
+            st.error("'To' date must be on or after 'From' date.")
+        else:
+            ref_no = gen_ref_no()
+            with st.spinner("Filling certificate template and converting to PDF\u2026"):
+                docx_bytes = fill_cert_docx_template(
+                    template_path,
+                    cert_name.strip(),
+                    fmt_from,
+                    fmt_to,
+                    fmt_issue,
+                    ref_no,
+                )
+                pdf_bytes, pdf_err = docx_to_pdf(docx_bytes)
+
+            safe_name = cert_name.strip().replace(" ", "_")
+            # Store in session state so the download button survives the rerun
+            st.session_state[ss_pdf]  = pdf_bytes
+            st.session_state[ss_docx] = docx_bytes
+            st.session_state[ss_name] = safe_name
+            st.session_state[ss_pdf + "_err"] = pdf_err
+
+    # Render download button OUTSIDE the generate block so it survives reruns
+    if st.session_state.get(ss_pdf):
+        st.markdown(
+            '<p class="success-badge">\u2705 Certificate ready for download!</p>',
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            label="\u2b07\ufe0f  Download Certificate PDF",
+            data=st.session_state[ss_pdf],
+            file_name=f"Certificate_{st.session_state[ss_name]}.pdf",
+            mime="application/pdf",
+            key=f"{key_prefix}_cert_dl_pdf",
+        )
+    elif st.session_state.get(ss_docx):
+        err_msg = st.session_state.get(ss_pdf + "_err", "")
+        st.warning(f"PDF conversion failed — downloading as Word document instead.\n\n`{err_msg}`" if err_msg else "PDF conversion failed — downloading as Word document instead.")
+        st.download_button(
+            label="\u2b07\ufe0f  Download Certificate DOCX",
+            data=st.session_state[ss_docx],
+            file_name=f"Certificate_{st.session_state[ss_name]}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key=f"{key_prefix}_cert_dl_docx",
+        )
 
 
 def render_offer_letter_form(role_title: str, template_path: str, key_prefix: str):
@@ -219,6 +502,7 @@ def render_offer_letter_form(role_title: str, template_path: str, key_prefix: st
     if candidate_name.strip():
         st.markdown(f"""
         <div class="preview-box"><strong>Preview snippet:</strong><br><br>
+<span style="color:#8ab4d4;font-size:.82rem;">Ref No.: HAR/XXXX/XXXX &nbsp;(generated on download)</span><br><br>
 Dear <strong>{candidate_name}</strong>,<br><br>
 On behalf of <strong>Harion Research</strong>, I am pleased to offer you the position of
 <strong>{role_title}</strong> for a duration of <strong>2 months</strong>,
@@ -233,17 +517,18 @@ starting from <strong>{formatted_date}</strong>.
         if not candidate_name.strip():
             st.error("Please enter the candidate's name before generating.")
         else:
-            with st.spinner("Filling template and converting to PDF…"):
-                docx_bytes = fill_docx_template(template_path, candidate_name.strip(), formatted_date)
-                pdf_bytes  = docx_to_pdf(docx_bytes)
+            ref_no = gen_ref_no()
+            with st.spinner("Filling template and converting to PDF\u2026"):
+                docx_bytes = fill_docx_template(template_path, candidate_name.strip(), formatted_date, ref_no)
+                pdf_bytes, pdf_err = docx_to_pdf(docx_bytes)
 
             safe_name = candidate_name.strip().replace(" ", "_")
 
             if pdf_bytes:
-                st.markdown('<p class="success-badge">✅ Offer letter ready for download!</p>',
+                st.markdown('<p class="success-badge">\u2705 Offer letter ready for download!</p>',
                             unsafe_allow_html=True)
                 st.download_button(
-                    label="⬇️  Download PDF",
+                    label="\u2b07\ufe0f  Download PDF",
                     data=pdf_bytes,
                     file_name=f"Offer_Letter_{safe_name}.pdf",
                     mime="application/pdf",
@@ -251,11 +536,12 @@ starting from <strong>{formatted_date}</strong>.
                 )
             else:
                 st.warning(
-                    "PDF conversion failed — LibreOffice may not be available on this server. "
-                    "Downloading as Word document instead."
+                    f"PDF conversion failed \u2014 downloading as Word document instead.\n\n`{pdf_err}`"
+                    if pdf_err else
+                    "PDF conversion failed \u2014 downloading as Word document instead."
                 )
                 st.download_button(
-                    label="⬇️  Download DOCX",
+                    label="\u2b07\ufe0f  Download DOCX",
                     data=docx_bytes,
                     file_name=f"Offer_Letter_{safe_name}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -275,20 +561,39 @@ st.markdown("""
   </div>
 """, unsafe_allow_html=True)
 
-tab1, tab2 = st.tabs(["📊 Equity Research Analyst", "📣 Marketing"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Offer – Equity Research",
+    "📣 Offer – Marketing",
+    "🎓 Certificate – Equity Research",
+    "🎓 Certificate – Marketing",
+])
 
 with tab1:
     render_offer_letter_form(
         role_title="Equity Research Analyst Intern",
         template_path=EQUITY_TEMPLATE_PATH,
-        key_prefix="equity"
+        key_prefix="equity",
     )
 
 with tab2:
     render_offer_letter_form(
         role_title="Marketing Intern",
         template_path=MARKETING_TEMPLATE_PATH,
-        key_prefix="marketing"
+        key_prefix="marketing",
+    )
+
+with tab3:
+    render_certificate_form(
+        role_title="Equity Research Analyst Intern",
+        template_path=EQUITY_CERT_TEMPLATE_PATH,
+        key_prefix="cert_equity",
+    )
+
+with tab4:
+    render_certificate_form(
+        role_title="Marketing Intern",
+        template_path=MARKETING_CERT_TEMPLATE_PATH,
+        key_prefix="cert_marketing",
     )
 
 st.markdown("</div>", unsafe_allow_html=True)
