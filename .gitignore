@@ -3,7 +3,7 @@ __pycache__/
 *.pyo
 *.pyd
 .st/
-.streamlit/
+
 *.log
 debug_pdf.py
 debug_mkt_cert.py
