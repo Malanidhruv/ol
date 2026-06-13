@@ -645,14 +645,16 @@ def render_email_form():
 
     # ── Attachment ────────────────────────────────────────────────────────────
     st.markdown('<p class="section-label">Attachment (optional)</p>', unsafe_allow_html=True)
-    attachment = st.file_uploader(
-        "Attach a file",
+    attachments = st.file_uploader(
+        "Attach files",
         label_visibility="collapsed",
-        help="Attach a PDF, DOCX, or any file you want to send with the email.",
+        accept_multiple_files=True,
+        help="Attach one or more PDF, DOCX, or any files to send with the email.",
         key="email_attachment",
     )
-    if attachment:
-        st.caption(f"📎 {attachment.name}  ({round(len(attachment.getvalue()) / 1024, 1)} KB)")
+    if attachments:
+        for f in attachments:
+            st.caption(f"📎 {f.name}  ({round(len(f.getvalue()) / 1024, 1)} KB)")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -682,7 +684,7 @@ def render_email_form():
                     msg["Subject"] = subject.strip()
                     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-                    if attachment:
+                    for attachment in (attachments or []):
                         part = MIMEBase("application", "octet-stream")
                         part.set_payload(attachment.getvalue())
                         _enc.encode_base64(part)
