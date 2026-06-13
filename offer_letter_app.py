@@ -94,6 +94,20 @@ st.markdown("""
     [data-testid="stAlert"] {
         background:#1c2333 !important; color:#fafafa !important;
     }
+
+    /* Email toggle button in header */
+    .email-btn-wrap button {
+        background: #1a3a5c !important;
+        border: 1px solid #4a90d9 !important;
+        color: #4a90d9 !important;
+        border-radius: 8px !important;
+        padding: .4rem 1.1rem !important;
+        font-size: .9rem !important;
+        font-weight: 600 !important;
+        width: auto !important;
+        margin-top: 0 !important;
+    }
+    .email-btn-wrap button:hover { background: #234d7a !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -713,59 +727,74 @@ def render_email_form():
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
-st.markdown("""
-<div class="main-card">
-  <div class="brand-header">
-    <div>
-      <p class="brand-title">📄 Harion Research</p>
-      <p class="brand-sub">Internship Offer Letter Generator · HR Portal</p>
-    </div>
-  </div>
-""", unsafe_allow_html=True)
+if "show_email" not in st.session_state:
+    st.session_state["show_email"] = False
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Offer – Equity Research",
-    "📣 Offer – Marketing",
-    "🎓 Certificate – Equity Research",
-    "🎓 Certificate – Marketing",
-    "📧 Send Email",
-])
+st.markdown('<div class="main-card">', unsafe_allow_html=True)
 
-with tab1:
-    render_offer_letter_form(
-        role_title="Equity Research Analyst Intern",
-        template_path=EQUITY_TEMPLATE_PATH,
-        key_prefix="equity",
+# Header: brand on left, email button on right
+hdr_left, hdr_right = st.columns([5, 1])
+with hdr_left:
+    st.markdown(
+        '<div class="brand-header">'
+        '  <div>'
+        '    <p class="brand-title">📄 Harion Research</p>'
+        '    <p class="brand-sub">Internship Offer Letter Generator · HR Portal</p>'
+        '  </div>'
+        '</div>',
+        unsafe_allow_html=True,
     )
+with hdr_right:
+    st.markdown('<div class="email-btn-wrap">', unsafe_allow_html=True)
+    email_label = "✖ Close" if st.session_state["show_email"] else "📧 Email"
+    if st.button(email_label, key="toggle_email_btn"):
+        st.session_state["show_email"] = not st.session_state["show_email"]
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-with tab2:
-    render_offer_letter_form(
-        role_title="Marketing Intern",
-        template_path=MARKETING_TEMPLATE_PATH,
-        key_prefix="marketing",
-    )
-
-with tab3:
-    render_certificate_form(
-        role_title="Equity Research Analyst Intern",
-        template_path=EQUITY_CERT_TEMPLATE_PATH,
-        key_prefix="cert_equity",
-    )
-
-with tab4:
-    render_certificate_form(
-        role_title="Marketing Intern",
-        template_path=MARKETING_CERT_TEMPLATE_PATH,
-        key_prefix="cert_marketing",
-    )
-
-with tab5:
+# Show email composer OR the 4 document tabs
+if st.session_state["show_email"]:
     render_email_form()
+else:
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Offer – Equity Research",
+        "📣 Offer – Marketing",
+        "🎓 Certificate – Equity Research",
+        "🎓 Certificate – Marketing",
+    ])
 
-st.markdown("</div>", unsafe_allow_html=True)
+    with tab1:
+        render_offer_letter_form(
+            role_title="Equity Research Analyst Intern",
+            template_path=EQUITY_TEMPLATE_PATH,
+            key_prefix="equity",
+        )
+
+    with tab2:
+        render_offer_letter_form(
+            role_title="Marketing Intern",
+            template_path=MARKETING_TEMPLATE_PATH,
+            key_prefix="marketing",
+        )
+
+    with tab3:
+        render_certificate_form(
+            role_title="Equity Research Analyst Intern",
+            template_path=EQUITY_CERT_TEMPLATE_PATH,
+            key_prefix="cert_equity",
+        )
+
+    with tab4:
+        render_certificate_form(
+            role_title="Marketing Intern",
+            template_path=MARKETING_CERT_TEMPLATE_PATH,
+            key_prefix="cert_marketing",
+        )
+
+st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("---")
 st.markdown(
     "<center style='color:#aaa;font-size:.78rem;'>© 2025 Harion Research · HR Internal Tool</center>",
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
