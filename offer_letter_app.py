@@ -565,6 +565,150 @@ starting from <strong>{formatted_date}</strong>.
                 )
 
 
+# ── Email sender ─────────────────────────────────────────────────────────────
+
+SMTP_HOST   = "smtp.zoho.in"
+SMTP_PORT   = 465
+FROM_EMAIL  = "hr@harionresearch.co.in"
+
+
+def _get_zoho_password() -> str:
+    """Return Zoho password from secrets.toml or environment, else empty string."""
+    try:
+        pw = st.secrets.get("ZOHO_PASSWORD", "")
+        if pw and pw != "your-zoho-app-password-here":
+            return pw
+    except Exception:
+        pass
+    return os.environ.get("ZOHO_PASSWORD", "")
+
+
+def render_email_form():
+    """Simple email composer that sends via Zoho SMTP."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders as _enc
+
+    st.markdown(
+        "Send an email directly from "
+        "**hr@harionresearch.co.in** via Zoho Mail."
+    )
+
+    # ── Password ──────────────────────────────────────────────────────────────
+    stored_pw = _get_zoho_password()
+    if not stored_pw:
+        st.info(
+            "🔑 No app password found in `secrets.toml`. "
+            "Enter it below — it won't be stored."
+        )
+    zoho_pw = st.text_input(
+        "Zoho App Password",
+        value=stored_pw,
+        type="password",
+        placeholder="Paste your Zoho app password",
+        help="Generate one in Zoho Mail → Settings → Security → App Passwords",
+        key="email_zoho_pw",
+    )
+
+    st.markdown("---")
+
+    # ── To ────────────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-label">To — Recipient Email Address</p>', unsafe_allow_html=True)
+    to_email = st.text_input(
+        "To",
+        placeholder="e.g. candidate@gmail.com",
+        label_visibility="collapsed",
+        help="The email address of the person you are writing to.",
+        key="email_to",
+    )
+
+    # ── Subject ───────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-label">Subject</p>', unsafe_allow_html=True)
+    subject = st.text_input(
+        "Subject",
+        placeholder="e.g. Offer Letter – Harion Research Internship",
+        label_visibility="collapsed",
+        key="email_subject",
+    )
+
+    # ── Body ──────────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-label">Message Body</p>', unsafe_allow_html=True)
+    body = st.text_area(
+        "Body",
+        placeholder="Type your email message here…",
+        height=220,
+        label_visibility="collapsed",
+        key="email_body",
+    )
+
+    # ── Attachment ────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-label">Attachment (optional)</p>', unsafe_allow_html=True)
+    attachment = st.file_uploader(
+        "Attach a file",
+        label_visibility="collapsed",
+        help="Attach a PDF, DOCX, or any file you want to send with the email.",
+        key="email_attachment",
+    )
+    if attachment:
+        st.caption(f"📎 {attachment.name}  ({round(len(attachment.getvalue()) / 1024, 1)} KB)")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Send ──────────────────────────────────────────────────────────────────
+    if st.button("📤 Send Email", key="send_email_btn"):
+        errors = []
+        if not to_email.strip():
+            errors.append("Recipient email address is required.")
+        elif "@" not in to_email:
+            errors.append("Recipient email address looks invalid.")
+        if not subject.strip():
+            errors.append("Subject is required.")
+        if not body.strip():
+            errors.append("Message body cannot be empty.")
+        if not zoho_pw.strip():
+            errors.append("Zoho app password is required to send.")
+
+        if errors:
+            for e in errors:
+                st.error(e)
+        else:
+            with st.spinner("Connecting to Zoho and sending…"):
+                try:
+                    msg = MIMEMultipart()
+                    msg["From"]    = FROM_EMAIL
+                    msg["To"]      = to_email.strip()
+                    msg["Subject"] = subject.strip()
+                    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+                    if attachment:
+                        part = MIMEBase("application", "octet-stream")
+                        part.set_payload(attachment.getvalue())
+                        _enc.encode_base64(part)
+                        part.add_header(
+                            "Content-Disposition",
+                            f'attachment; filename="{attachment.name}"',
+                        )
+                        msg.attach(part)
+
+                    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+                        server.login(FROM_EMAIL, zoho_pw.strip())
+                        server.sendmail(FROM_EMAIL, to_email.strip(), msg.as_string())
+
+                    st.success(f"✅ Email sent to **{to_email.strip()}** successfully!")
+                    st.balloons()
+                except smtplib.SMTPAuthenticationError:
+                    st.error(
+                        "❌ Authentication failed. Check your Zoho App Password "
+                        "(not your login password — generate one in Zoho Settings → Security)."
+                    )
+                except smtplib.SMTPException as exc:
+                    st.error(f"❌ SMTP error: {exc}")
+                except Exception as exc:
+                    st.error(f"❌ Unexpected error: {exc}")
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.markdown("""
@@ -577,11 +721,12 @@ st.markdown("""
   </div>
 """, unsafe_allow_html=True)
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 Offer – Equity Research",
     "📣 Offer – Marketing",
     "🎓 Certificate – Equity Research",
     "🎓 Certificate – Marketing",
+    "📧 Send Email",
 ])
 
 with tab1:
@@ -611,6 +756,9 @@ with tab4:
         template_path=MARKETING_CERT_TEMPLATE_PATH,
         key_prefix="cert_marketing",
     )
+
+with tab5:
+    render_email_form()
 
 st.markdown("</div>", unsafe_allow_html=True)
 
