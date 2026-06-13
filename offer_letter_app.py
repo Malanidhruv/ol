@@ -318,8 +318,9 @@ def fill_cert_docx_template(
     to_date: str,
     issue_date: str,
     ref_no: str,
+    pronoun: str = "him",
 ) -> bytes:
-    """Replace the 5 {} placeholders in the certificate template.
+    """Replace the {} placeholders in the certificate template.
 
     Confirmed placeholder order (from XML inspection):
       1st  {} → issue date      (after "Date:")
@@ -327,6 +328,8 @@ def fill_cert_docx_template(
       3rd  {} → from date       ("from {} to")
       4th  {} → to date         ("to {}")
       5th  {} → intern name     ("put in by {}")
+      6th  {} → pronoun         (first occurrence, e.g. "him" / "her")
+      7th  {} → pronoun         (second occurrence, e.g. "him" / "her")
     """
     with open(template_path, "rb") as f:
         docx_bytes = f.read()
@@ -335,7 +338,7 @@ def fill_cert_docx_template(
         files = {n: zin.read(n) for n in zin.namelist()}
 
     xml = files["word/document.xml"].decode("utf-8")
-    for replacement in [issue_date, name, from_date, to_date, name]:
+    for replacement in [issue_date, name, from_date, to_date, name, pronoun, pronoun]:
         idx = xml.index("{}")
         xml = xml[:idx] + replacement + xml[idx + 2:]
     files["word/document.xml"] = xml.encode("utf-8")
@@ -365,7 +368,18 @@ def render_certificate_form(role_title: str, template_path: str, key_prefix: str
         key=f"{key_prefix}_cert_name",
     )
 
-    # Row 2 - internship period
+    # Row 2 - gender selector
+    st.markdown('<p class="section-label">Intern Gender (pronoun)</p>', unsafe_allow_html=True)
+    gender_choice = st.radio(
+        "Gender",
+        options=["Male (him/his)", "Female (her/her)"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key=f"{key_prefix}_gender",
+    )
+    pronoun = "him" if gender_choice.startswith("Male") else "her"
+
+    # Row 3 - internship period
     col_from, col_to = st.columns(2)
     with col_from:
         st.markdown('<p class="section-label">Internship From</p>', unsafe_allow_html=True)
@@ -386,7 +400,7 @@ def render_certificate_form(role_title: str, template_path: str, key_prefix: str
             key=f"{key_prefix}_cert_to",
         )
 
-    # Row 3 - date of issuance
+    # Row 4 - date of issuance
     st.markdown('<p class="section-label">Date of Issuance</p>', unsafe_allow_html=True)
     cert_issue = st.date_input(
         "Date of Issuance",
@@ -408,7 +422,8 @@ def render_certificate_form(role_title: str, template_path: str, key_prefix: str
             f'Date of Issuance: <strong>{fmt_issue}</strong><br><br>'
             f'This is to certify that <strong>{cert_name}</strong> has successfully completed '
             f'the internship as a <strong>{role_title}</strong> at <strong>Harion Research</strong> '
-            f'from <strong>{fmt_from}</strong> to <strong>{fmt_to}</strong>.</div>',
+            f'from <strong>{fmt_from}</strong> to <strong>{fmt_to}</strong>.<br><br>'
+            f'We wish <strong>{pronoun}</strong> all the best in <strong>{pronoun}</strong> future endeavours.</div>',
             unsafe_allow_html=True,
         )
     else:
@@ -436,6 +451,7 @@ def render_certificate_form(role_title: str, template_path: str, key_prefix: str
                     fmt_to,
                     fmt_issue,
                     ref_no,
+                    pronoun,
                 )
                 pdf_bytes, pdf_err = docx_to_pdf(docx_bytes)
 
