@@ -332,7 +332,8 @@ def fill_cert_docx_template(
     to_date: str,
     issue_date: str,
     ref_no: str,
-    pronoun: str = "him",
+    pronoun_obj: str = "him",
+    pronoun_pos: str = "his",
 ) -> bytes:
     """Replace the {} placeholders in the certificate template.
 
@@ -342,8 +343,8 @@ def fill_cert_docx_template(
       3rd  {} → from date       ("from {} to")
       4th  {} → to date         ("to {}")
       5th  {} → intern name     ("put in by {}")
-      6th  {} → pronoun         (first occurrence, e.g. "him" / "her")
-      7th  {} → pronoun         (second occurrence, e.g. "him" / "her")
+      6th  {} → pronoun_obj     (object, e.g. "him" / "her")
+      7th  {} → pronoun_pos     (possessive, e.g. "his" / "her")
     """
     with open(template_path, "rb") as f:
         docx_bytes = f.read()
@@ -352,7 +353,7 @@ def fill_cert_docx_template(
         files = {n: zin.read(n) for n in zin.namelist()}
 
     xml = files["word/document.xml"].decode("utf-8")
-    for replacement in [issue_date, name, from_date, to_date, name, pronoun, pronoun]:
+    for replacement in [issue_date, name, from_date, to_date, name, pronoun_pos, pronoun_obj]:
         idx = xml.index("{}")
         xml = xml[:idx] + replacement + xml[idx + 2:]
     files["word/document.xml"] = xml.encode("utf-8")
@@ -391,7 +392,8 @@ def render_certificate_form(role_title: str, template_path: str, key_prefix: str
         label_visibility="collapsed",
         key=f"{key_prefix}_gender",
     )
-    pronoun = "him" if gender_choice.startswith("Male") else "her"
+    pronoun_obj = "him" if gender_choice.startswith("Male") else "her"
+    pronoun_pos = "his" if gender_choice.startswith("Male") else "her"
 
     # Row 3 - internship period
     col_from, col_to = st.columns(2)
@@ -437,7 +439,7 @@ def render_certificate_form(role_title: str, template_path: str, key_prefix: str
             f'This is to certify that <strong>{cert_name}</strong> has successfully completed '
             f'the internship as a <strong>{role_title}</strong> at <strong>Harion Research</strong> '
             f'from <strong>{fmt_from}</strong> to <strong>{fmt_to}</strong>.<br><br>'
-            f'We wish <strong>{pronoun}</strong> all the best in <strong>{pronoun}</strong> future endeavours.</div>',
+            f'We wish <strong>{pronoun_obj}</strong> all the best in <strong>{pronoun_pos}</strong> future endeavours.</div>',
             unsafe_allow_html=True,
         )
     else:
@@ -465,7 +467,8 @@ def render_certificate_form(role_title: str, template_path: str, key_prefix: str
                     fmt_to,
                     fmt_issue,
                     ref_no,
-                    pronoun,
+                    pronoun_obj,
+                    pronoun_pos,
                 )
                 pdf_bytes, pdf_err = docx_to_pdf(docx_bytes)
 
