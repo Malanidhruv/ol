@@ -22,6 +22,31 @@ st.set_page_config(
     layout="centered",
 )
 
+
+ADMIN_PASSWORD = "Admin"
+
+
+def _require_admin_login() -> None:
+    """Show login form until the correct admin password is entered."""
+    if st.session_state.get("admin_authenticated"):
+        return
+
+    st.markdown(
+        '<div class="main-card" style="max-width:420px;margin:3rem auto;">'
+        '<p class="brand-title" style="text-align:center;">📄 Harion Research</p>'
+        '<p class="brand-sub" style="text-align:center;margin-bottom:1.5rem;">'
+        "HR Portal — sign in to continue</p></div>",
+        unsafe_allow_html=True,
+    )
+    pw = st.text_input("Admin password", type="password", key="admin_pw")
+    if st.button("Sign in", key="admin_login_btn", use_container_width=True):
+        if pw == ADMIN_PASSWORD:
+            st.session_state["admin_authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
+
 # ── Branding / CSS ────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -617,9 +642,12 @@ def render_email_form():
     stored_pw = _get_zoho_password()
     if not stored_pw:
         st.info(
-            "🔑 No app password found in `secrets.toml`. "
-            "Enter it below — it won't be stored."
+            "🔑 No Zoho app password found. Enter it below, or add "
+            "`ZOHO_PASSWORD` in **Streamlit Cloud → App settings → Secrets** "
+            "(or in `.streamlit/secrets.toml` for local runs)."
         )
+    else:
+        st.success("🔑 Zoho app password loaded from secrets.")
     zoho_pw = st.text_input(
         "Zoho App Password",
         value=stored_pw,
@@ -729,6 +757,8 @@ def render_email_form():
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
+
+_require_admin_login()
 
 if "show_email" not in st.session_state:
     st.session_state["show_email"] = False
