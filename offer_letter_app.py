@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 
-ADMIN_PASSWORD = "Admin"
+ADMIN_PASSWORD = "Admin123"
 
 
 def _require_admin_login() -> None:
