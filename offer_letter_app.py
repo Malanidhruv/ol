@@ -549,7 +549,6 @@ def render_offer_letter_form(role_title: str, template_path: str, key_prefix: st
         start_date = st.date_input(
             "Start Date",
             value=date.today() + timedelta(days=7),
-            min_value=date.today(),
             label_visibility="collapsed",
             format="DD/MM/YYYY",
             key=f"{key_prefix}_date"
